@@ -1,1 +1,687 @@
-Project Description
+<?php
+@session_start();
+error_reporting(0);
+
+//include $myDir['lib'].'/email.lib';
+
+$post = new post;
+
+class post{
+    
+    var $result = array(
+            'result'=>'fail', 
+            'title' => "Ошибка",
+            'text' => "Unknown Error",
+            'errors' => array()
+        );
+    
+    
+    var $text = array("success" => "Успех", "fail"=>"Ошибка");
+    
+    
+    var $valid = array();
+    
+    function __construct(){
+        
+                
+        include $_SERVER['DOCUMENT_ROOT'].'/cfg.php';
+        include $myDir['lib'].'/email.lib';
+        include $myDir['lib'].'/db.lib';
+        db::connect($_DB["name"], $_DB["host"], $_DB["user"], $_DB["pass"], $_DB["pref"]);
+        db::query("set NAMES utf8;");
+        
+        
+        
+        $method = '_'.$_POST['params']['key'];
+        if (method_exists(__CLASS__,$method) )
+        {               
+                call_user_func_array(array($this, $method), array($_POST['values']));
+        }
+        
+        
+        return $this->result();
+        
+    }
+    
+    
+    
+    // Updateng profile
+    function _profile($arr){
+        
+                    
+        
+             if (empty($_SESSION['user']['info']['id'])){
+                 
+                 $this->result['error'][] = 'Необходимо сначала авторизоваться';
+                 return $this->result();
+             }
+                
+             $this->valid['profile'] = array(
+                    'name' => array(
+                        'empty'=>array(
+                            'm'=>'Необходимо указать Имя'
+                            ),
+                        ),
+                    'email' => array(
+                        'email'=>array(
+                            'm'=>'Необходимо указать email'
+                            ),
+                        )
+            );  
+             
+            $this->validate( $this->valid['profile'] , $arr);
+             
+            if (!empty($arr['password'])){
+                
+                
+                $opassword = md5('sd'.md5($arr['opassword']).'ds');
+                $eq = db::getOne("SELECT 1 FROM %pref%_users WHERE u_password='".$opassword."' && u_id=".$_SESSION['user']['info']['id']);
+                //if ( !$eq )echo 'сука';else echo 'блять';
+                //$this->result['result'] = 'error';
+                //$this->result['text'] = "SELECT 1 FROM %pref%_users WHERE u_password='".$opassword."' && u_id=".$_SESSION['user']['info']['id'];
+                //return $this->result();
+                
+                if ( !$eq ){ 
+                    $this->result['result'] = 'error';
+                    $this->result['text'] = 'Старый пароль указан неверно.';
+                    return $this->result();
+                    
+                }else{
+                    
+                    $password = md5('sd'.md5($arr['password']).'ds');
+                    db::query("UPDATE %pref%_users SET u_password='".$password."'  WHERE u_id=".$_SESSION['user']['info']['id']);
+                    
+                }
+                    
+            }
+                
+               
+            
+            db::query("Update %pref%_users SET 
+                       u_name='".$arr['name']."', 
+                       u_last_name='".$arr['last_name']."', 
+                       u_tel='".$arr['tel']."', 
+                       u_email='".$arr['email']."',
+                       u_adres='".$arr['adres']."',
+                       u_spam=".(int)$arr['spam'].",
+                       u_sms=".(int)$arr['sms']."
+
+                   WHERE u_id=".$_SESSION['user']['info']['id']);
+
+           
+
+            if (!db::$Error){
+
+                $this->result['result'] = 'success';
+                $this->result['text'] = 'Данные успешно сохранены';
+
+            }else{
+
+               $this->result['result'] = 'error';
+               $this->result['text'] = 'Произошла неизвестная ошибка. Приносим извинения.'.db::$Error;
+            }
+            
+            return $this->result();
+
+    }
+    // END profile func
+    
+    
+    
+    // Remind password
+    function _remind($arr){
+        
+        if (!empty($_SESSION['user']['info'])){
+            $this->result['text'] = "Вы уже авторизованы.";  
+            $this->result['redirect']['url'] = '/my/profile/';
+            $this->result['redirect']['delay'] = '2000';
+            $this->result();            
+        }
+        
+        
+        if (empty($arr['email'])){
+            
+                $this->result['text'] = "Обнаружены ошибки";
+                $this->errors['email'] = true;
+                $this->result['errors']['email'] = 'Необходимо указать email.';                
+                $this->result();
+        }
+        
+        $sql = "SELECT u_id FROM %pref%_users WHERE u_email='".$arr['email']."' LIMIT 0,1";
+        $uid = db::getOne($sql);
+        
+        
+        if($uid){
+                $this->result['result'] = 'success';
+                $this->result['text'] = 'На указанный email выслана инструкция по восстановлению пароля';
+                $this->result['hide'] = '#formRemind';
+                $this->result['show'] = '#resultRemind';
+                
+                
+                
+                $data = db::getAssoc("SELECT config_name,config_value FROM %pref%_config");
+                $data['email.remind.body'] = str_replace("{link}","http://vinnypooh.ru/my/remind/?".md5($arr['email']).$uid,$data['email.remind.body']);              
+                $e = new email();
+                $e->head['From'] = $data['email.remind.from'];                  
+                $e->send($arr['email'],$data['email.remind.subject'],$data['email.remind.body']);
+                 
+                
+        }else{
+            
+            $this->result['result'] = 'error';
+            $this->result['text'] = 'Ошибка';//.db::$Error;
+            $this->result['errors']['email'] = 'Email не найден';//.db::$Error;
+               
+        }
+    return $this->result();        
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    // SIGN USER
+    function _sign($arr){
+        
+        
+        $this->valid['sign'] = array(                    
+                    'email' => array(
+                        'email'=>array(
+                            'm'=>'Необходимо указать email'
+                            ),
+                        ),
+                    'password' => array(
+                             'empty'=>array(
+                                 'm'=>'Необходимо указать пароль',                                 
+                                 ),
+                             )
+            );  
+        $this->validate( $this->valid['sign'] , $arr);
+        //80571
+        //var_dump($arr);
+        $password = md5('sd'.md5($arr['password']).'ds');
+        $sql = "SELECT u_id FROM %pref%_users WHERE u_email='".$arr['email']."' AND u_password='".$password."' LIMIT 0,1";
+        $uid = db::getOne($sql);
+        
+        if($uid){
+                $this->result['result'] = 'success';
+                $this->result['text'] = 'Вы успешно авторизовались<br /><br />Сейчас вы будете перенаправлены в <a href="/my/profile/">Личный кабинет</a>';
+                $this->result['redirect']['url'] = '/my/profile/';
+                $this->result['redirect']['delay'] = '2000';
+                
+                include $GLOBALS['myDir']['lib'].'/user.lib';
+                user::get($uid);
+        }else{
+            
+            $this->result['result'] = 'error';
+            $this->result['text'] = 'Ошибка';//.db::$Error;
+            $this->result['errors']['email'] = 'Логин или пароль введены неправильно';//.db::$Error;
+               
+        }
+        
+        return $this->result();
+    }
+    
+    
+    
+    
+    
+    
+    
+    // REGISTER USER
+    function _register($arr){
+                                       
+             
+
+           $this->valid['profile'] = array(
+                    'tel' => array(
+                        'empty'=>array(
+                            'm'=>'Необходимо указать № телефона'
+                            ),
+                        ),
+                    'email' => array(
+                        'email'=>array(
+                            'm'=>'Необходимо указать email'
+                            ),
+                        ),
+                    'password' => array(
+                             'equal'=>array(
+                                 'm'=>'Пароли должны совпадать',
+                                 'to'=>array('password2')
+                                 ),
+                             )
+            );  
+           
+           $this->validate( $this->valid['profile'] , $arr);
+               
+          
+           
+           $uid = db::getOne("SELECT u_id FROM %pref%_users WHERE u_email='".$arr['email']."'");
+           
+           if ($uid){
+               
+                $this->errors['email'] = true;
+                $this->result['errors']['email'] = 'Email уже используется.<br /><a href="/my/remind/">Напомнить пароль</a>';
+                $this->result['text'] = 'Обнаружена ошибка';
+                $this->result();
+           }
+           
+           
+           db::getOne("INSERT INTO %pref%_users (u_email) VALUES ('".$arr['email']."')");
+           $uid = db::last_id();
+           
+           
+           if ($arr['face'] != -1) $arr['face'] = 0;
+               
+           $arr2 = $_POST['opt'];
+           $pass = md5('sd'.md5($arr['password']).'ds');
+           db::query("Update %pref%_users SET 
+                    u_name='".$arr['name']."', 
+                    u_last_name='".$arr['last_name']."', 
+                    u_tel='".$arr['tel']."', 
+                    u_email='".$arr['email']."',
+                    u_password='".$pass."',
+                    u_adres='".$arr['adres']."',
+                    u_spam=".(int)$arr['spam'].",
+                    u_sms=".(int)$arr['sms'].",
+                        
+                    u_opt=".(int)$arr['face'].",
+                    u_active='Y',
+                           
+                    opt_face = ".(int)$arr2['face'].",
+                    opt_name = '".$arr2['name']."',
+                    opt_shop = '".$arr2['shop']."',
+                    opt_uaddres = '".$arr2['uaddres']."',
+                    opt_faddres = '".$arr2['faddres']."',
+                    opt_ogrn = '".$arr2['ogrn']."',
+                    opt_inn = '".$arr2['inn']."',
+                    opt_kpp = '".$arr2['kpp']."',
+                    opt_okpo = '".$arr2['okpo']."',
+                    opt_bank = '".$arr2['bank']."',
+                    opt_bik = '".$arr2['bik']."',
+                    opt_ks = '".$arr2['ks']."',
+                    opt_rs = '".$arr2['rs']."'
+
+                   WHERE u_id=".$uid);
+
+           
+
+            if (!db::$Error){
+
+                $this->result['result'] = 'success';
+                $this->result['text'] = 'Вы успешно завершили регистрацию';
+                $this->result['hide'] = '#formRegister';
+                if ($arr['face'] == -1) // opt
+                    $this->result['show'] = '#optResult';
+                else
+                    $this->result['show'] = '#divResult';
+                
+                
+                $e = new email();
+                $data = db::getAssoc("SELECT config_name,config_value FROM %pref%_config");
+                
+                if ($arr['face'] == -1){ // opt
+                    
+                    $text = $this->rtpl( $data['email.optreg.body'] , $arr);
+                    $subj = $this->rtpl( $data['email.optreg.subject'] , $arr);
+                    $e->head['From'] = $data['email.optreg.from'];
+                                    
+                }else{                                        
+                    
+                    $text = $this->rtpl( $data['email.kikoreg.body'] , $arr);
+                    $subj = $this->rtpl( $data['email.kikoreg.subject'] , $arr);
+                    $e->head['From'] = $data['email.kikoreg.from'];
+                }
+                                
+                $e->send($arr['email'],$subj,$text);
+                
+                include $GLOBALS['myDir']['lib'].'/user.lib';
+                user::get($uid);
+                               
+                
+            }else{
+
+               $this->result['result'] = 'error';
+               $this->result['text'] = 'Произошла неизвестная ошибка. Приносим извинения.';//.db::$Error;
+            }
+            
+            return $this->result();
+
+    }
+    // END profile func
+    
+    
+    
+    /* FEEDBACK Function
+     * 
+     * mail user message to specify emaul
+     *     
+     */
+    function _feedback($arr){
+        
+        $this->valid['feedback'] = array(
+                    'name' => array(
+                        'empty'=>array(
+                            'm'=>'Необходимо указать Имя'
+                            ),
+                        ),
+            );  
+             
+        $this->validate( $this->valid['feedback'] , $arr);
+        
+            
+            $_CFG = db::getAssoc("SELECT config_name, config_value FROM %pref%_config");
+            
+            if (!empty($_CFG['order.notice.from']))
+        	$retmail = $_CFG['order.notice.from'];
+        	else $retmail=" robot@".$_DOMAIN."(Mail robot)";
+                
+            $arr['head'] = "MIME-Version: 1.0\r\n";
+            $arr['head'] .= "Content-Type: text/plain; charset=UTF-8\r\n";
+            $arr['head'] .= "Date: ".date("r")."\r\n";
+            $arr['head'] .= "Return-Path: ".$retmail.">";
+            $arr['head'] .= "Sender: ".$retmail.">\r\n";
+            $arr['head'] .= "From: ".$retmail."\r\n";
+
+
+            $arr['subj'] = 'Message  from '.$_SERVER["HTTP_HOST"];
+            $arr['content'] = "С сайта ".$_SERVER["HTTP_HOST"]." было послано письмо следующего содержания: \n".
+            "\n============================================\n".
+            //"Тип письма : \t".$_POST['value']['ftype']."\n".                
+            "Имя : \t\t".$arr['name']."\n".
+            "Телефон : \t".$arr['tel']."\n".
+            "E-mail : \t".$arr['email']."\n".
+            //"IP : \t".$_SERVER['REMOTE_ADDR']."\n".
+            "Текст сообщения : \n".$arr['text'].
+            "\n============================================\n" ;
+                
+                
+                
+        !empty($_CFG['feedback.bcc']) && $arr['head'] .= "Bcc: ".$_CFG['feedback.bcc']."\r\n";
+        if (mail($_CFG['feedback.email'],$arr['subj'],$arr['content'],$arr['head'])){
+
+            $this->result['result'] = 'success'; 
+            $this->result['text'] = 'Сообщение успешно отправлено';
+        }
+
+        return $this->result();
+    }
+    
+    /*
+     *  Форма заказа запчастей
+     *  http://shop.iceberg.ru/parts/
+     */
+    function _parts($arr){
+        
+        $validate = array(
+                    'Имя' => array(
+                        'empty'=>array(
+                            'm'=>'Необходимо указать Имя'
+                            ),
+                        ),
+                    'Телефон' => array(
+                        'empty'=>array(
+                            'm'=>'Необходимо указать Имя'
+                            ),
+                        ),
+            );  
+             
+        $this->validate( $validate, $arr);
+        
+        
+        
+        $_CFG = db::getAssoc("SELECT config_name,config_value FROM %pref%_config");
+        
+        foreach ($arr as $k=>$v)
+            $arr2email['order'] .= $k.":\t".$v."\n";
+        
+        
+        $text = $this->rtpl( $_CFG['email.parts.body'] , $arr2email);
+        //$subject = $this->rtpl( $_CFG['email.parts.subject'] , $arr);
+        $subject = $_CFG['email.parts.subject'];
+       
+        
+        $e = new email();
+        $e->head['From'] = $_CFG['email.parts.from'];                  
+        
+
+        
+        $result = $e->send($_CFG['email.parts.to'],$subject,$text);  
+        
+        $this->result['result'] = 'success';
+        $this->result['title'] = 'Заявка принята.';
+        $this->result['text'] = 'Заявка принята. Ожидайте';
+        $this->result['hide'] = '#partsForm > div';
+        $this->result['show'] = '#partsForm .result';
+        $this->result['append']['#partsForm .result'] = '<b>Заявка принята. Ожидайте.</b>';
+        
+        $this->result();   
+    }
+    
+    
+    /*
+     *  Оформление заказа
+     */
+    function _order($arr){
+        error_reporting(E_ALL);
+        
+        
+        if (empty($arr['u']['tel'])){            
+            $this->result['notice']['error'] = "Необходимо указать № телефона";
+            $this->result();            
+        }
+         
+        
+        
+        
+        
+        $_CFG = db::getAssoc("SELECT config_name, config_value FROM %pref%_config");
+        
+        
+        
+        //$arr2sql['o_uid']       = (int)@$_SESSION['user']['info']['id'];
+        $arr2sql['o_utype']      = $arr['u']['type'];
+	$arr2sql['o_uname']      = $arr['u']['name'];
+	$arr2sql['o_uemail']     = $arr['u']['email'];
+	$arr2sql['o_utel']       = $arr['u']['tel'];
+	$arr2sql['o_uadres']     = $arr['u']['adres'];
+        $arr2sql['o_urekv']     = $arr['u']['rekv'];
+	$arr2sql['o_ucomment']   = $arr['u']['comment'];
+	//$arr2sql['o_payment']   = $arr['u']['payment'];
+	$arr2sql['o_delivery']  = $arr['u']['delivery'];
+        
+        
+            
+        
+        
+        $arr2sql = array_map(create_function('$a', 'return is_numeric($a)?$a:"\'".$a."\'";'),$arr2sql);
+        $arr2sql['o_time'] = 'NOW()';
+	$sql = "INSERT INTO %pref%_orders (".implode(',',array_keys($arr2sql)).") VALUES(".implode(',',$arr2sql).")";
+	db::query($sql);
+
+        $arr['oid'] = db::last_id();
+        
+        
+        
+        $arr['cat'] = db::getAll("SELECT * FROM %pref%_cat WHERE cat_id IN (".implode(",",array_keys($arr['items'])).")");
+        
+         
+        
+        
+        foreach($arr['cat'] as $k=>$r)
+        {
+            $price = ceil($r['cat_price']/100);
+            $cnt = (int)$arr['items'][$r['cat_id']];
+
+            db::query("INSERT INTO %pref%_orders_items (i_oid,i_catid,i_price,i_cnt) 
+                        VALUES(".(int)$arr['oid'].",".(int)$r['cat_id'].",".$price.",".$cnt.")");
+
+            // данные для письма
+            @$arr2email['order'] .= $r['cat_art'].' / '.
+                                    $r['cat_name'].' '.(int)$arr['items'][$r['cat_id']].' шт. / '.
+                                    ($price*$cnt)." руб.\n";
+
+            // суммируем покупку
+            @$arr['sum'] += $price*$cnt + $arr['sum'];
+
+            // данные для метрики
+            //$arr2json['yaParams']['goods'][] = array('name'=>$r['cat_name'].' ('.$r['cat_art'].')','price'=>(int)$price,'quantity'=>1);
+        }
+        
+        $arr2json['order']['id'] = $arr['oid'];
+        /*
+        $arr2json['yaParams']['order_id'] = $arr['id'];
+        $arr2json['yaParams']['order_price'] = $arr['sum'];
+        $arr2json['yaParams']['currency'] = 'RUR';
+        $arr2json['yaParams']['exchange_rate'] = 1;
+        */
+                 
+        $arr2email['id'] = $arr['oid'];
+        $arr2email['sum'] = $arr['sum'];
+        $arr2email['name']      = $arr['u']['name'];
+	$arr2email['email']     = $arr['u']['email'];
+	$arr2email['tel']       = $arr['u']['tel'];
+	$arr2email['adres']     = $arr['u']['adres'];
+	$arr2email['comment']   = $arr['u']['comment'];
+	$arr2email['payment']   = $key2val[$arr['u']['payment']];
+	$arr2email['delivery']  = $key2val[$arr['u']['delivery']];
+        
+        
+        $arr2email['info'] = '';
+        !empty($arr['u']['name']) 	&& $arr2email['info'] .= "Имя : ".$arr['u']['name']."\n";
+	!empty($arr['u']['tel']) 	&& $arr2email['info'] .= "Телефон : ".$arr['u']['tel']."\n";
+	!empty($arr['u']['email']) 	&& $arr2email['info'] .= "E-Mail : ".$arr['u']['email']."\n";
+	!empty($arr['u']['delivery'])	&& $arr2email['info'] .= "Доставка : ".$arr['delivery'][$arr['u']['delivery']]."\n";
+	!empty($arr['u']['payment']) 	&& $arr2email['info'] .= "Оплата : ".$arr['payment'][$arr['u']['payment']]."\n";
+	!empty($arr['u']['adres']) 	&& $arr2email['info'] .= "Адрес : ".$arr['u']['adres']."\n";
+	!empty($arr['u']['comment']) 	&& $arr2email['info'] .= "Доп. информация : ".$arr['u']['comment']."\n";
+        
+        
+        
+        
+        $_CFG = db::getAssoc("SELECT config_name,config_value FROM %pref%_config");
+        
+        
+        $text = $this->rtpl( $_CFG['email.order.body'] , $arr2email);        
+        $subject = $this->rtpl( $_CFG['email.order.subject'] , $arr2email);
+        $text = $this->rtpl( $_CFG['text.order.success'] , $arr2email);
+        
+        
+        
+        $e = new email();
+        $e->head['From'] = $_CFG['email.order.from'];                                                          
+        $result = $e->send($_CFG['email.order.to'],$subject,$text);
+        
+        
+        
+	unset($_SESSION['user']['data']['cart']);
+        
+        $this->result['result']='success'; 
+        $this->result['text'] = 'Вы успешно оформили заказ';
+        $this->result['hide'] = '#orderStep2';
+        $this->result['show'] = '#orderStep3';
+        $this->result['append'] = array('#orderStep3'=>$text);
+        $this->result['yaParams'] = $arr2json['yaParams'];
+                                  
+                                  
+        return $this->result();        
+        
+    }
+
+
+
+
+
+
+    function validate($validators , $data){
+        
+        foreach ($validators as $item => $a){
+            
+            // item -> name of element
+            // arr -> array of validators
+            foreach ($a as $fn=>$i){
+
+                    if (method_exists('validator',$fn) || 1){
+                        //var_dump($data);
+                        
+                        $r = !call_user_func_array('validator::is_'.$fn, array($data[$item], $i, $data) );
+                        if ( $r ){
+
+                            $this->errors[$item] = true;
+                            $this->result['errors'][$item] = $a[$fn]['m'];
+                        }
+                    }
+
+
+            }
+            
+        }    
+        //  var_dump($this->errors);
+        if ( !empty($this->errors) ){
+            $this->result['text'] = "Обнаружены ошибки";
+            return $this->result();
+        }
+            
+    }
+    
+    
+    function result(){
+        
+        echo json_encode($this->result);
+        
+        exit;
+    }
+    
+    
+    
+    static function rtpl($text = '', $arr){
+        
+        $arr2 = array();
+        foreach ((array)$arr as $k=>$v)
+            $arr2['%'.$k.'%'] = $v;
+        
+        return str_replace(array_keys($arr2), array_values($arr2), $text);
+                
+    }
+}
+
+
+class validator{
+    
+    //static var $err = array('empty'=>);
+    
+    static function is_empty($a){
+        //var_dump(!empty($a));
+        return !empty($a);
+    }
+    
+    
+    static function is_equal($a = 0, $arr = array(), $data = array()){
+        //var_dump($arr['to']);
+        foreach ((array)$arr['to'] as $k)
+            if ($a != $data[$k])
+                //echo $a,' == ',$data[$k];
+                return false;
+            
+        return true;
+    }
+    
+    
+    static function is_email($a){
+        
+        if(function_exists('filter_var'))
+            return filter_var($a, FILTER_VALIDATE_EMAIL);
+
+	return preg_match("#^([a-z0-9_\-\.])+@([a-z0-9_\-\.])+\.([a-z0-9])+$#i", $a);        
+    }
+    
+    
+    
+}
+
+?>
